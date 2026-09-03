@@ -1,0 +1,15 @@
+
+AXE - Program compression utility - v2.2 
+Copyright 1987-1989 System Enhancement Associates
+
+Usage:  axe <source> [<backup>]  [-n] [-c<bytes>] [-s<clusters>] [-o<bytes>]
+
+  <source> is the program to compress
+  <backup> is the optional backup program name
+
+    -n     deletes the backup (CAUTION - see manual)
+    -c     sets the cluster size in bytes
+    -s     sets the minimum number of clusters to save
+    -o     sets the overlay warning size in bytes
+    -f     forces the compression (ignore warnings)
+
