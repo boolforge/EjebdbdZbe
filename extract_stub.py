@@ -1,43 +1,38 @@
-#!/usr/bin/env python3
-import sys, os
+#!/bin/bash
+# Extract the stub from AXE.EXE and generate the C array
+STUB_OFFSET=$((0x2012))
+STUB_SIZE=$((0x12D))
 
-def extract(axe_path, stub_bin_path, stub_h_path):
-    with open(axe_path, 'rb') as f:
-        data = f.read()
-    if data[:2] != b'MZ':
-        print("Error: Not MZ executable")
-        return False
-    import struct
-    e_cparhdr = struct.unpack_from('<H', data, 0x0E)[0]
-    header_size = e_cparhdr * 16
-    print(f"Header size: {header_size} bytes")
-    stub_offset = header_size
-    stub_size = 0x434
-    if stub_offset + stub_size > len(data):
-        print("Error: File too small")
-        return False
-    stub_data = data[stub_offset:stub_offset + stub_size]
-    os.makedirs(os.path.dirname(stub_bin_path), exist_ok=True)
-    with open(stub_bin_path, 'wb') as f:
-        f.write(stub_data)
-    print(f"Wrote {len(stub_data)} bytes to {stub_bin_path}")
-    os.makedirs(os.path.dirname(stub_h_path), exist_ok=True)
-    with open(stub_h_path, 'w') as f:
-        f.write('// Auto-generated
-static const uint8_t axe_stub[0x434] = {
-')
-        for i in range(0, len(stub_data), 16):
-            chunk = stub_data[i:i+16]
-            f.write('    ' + ', '.join(f'0x{b:02x}' for b in chunk) + ',
-')
-        f.write('};
-')
-    print(f"Wrote C header to {stub_h_path}")
-    return True
+if [ ! -f "AXE.EXE" ]; then
+    echo "ERROR: AXE.EXE not found"
+    echo "Download it first from: https://github.com/boolforge/EjebdbdZbe/"
+    exit 1
+fi
 
-if __name__ == '__main__':
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <axe.exe> <stub.bin> <stub.h>")
-        sys.exit(1)
-    success = extract(sys.argv[1], sys.argv[2], sys.argv[3])
-    sys.exit(0 if success else 1)
+echo "Extracting stub from AXE.EXE (offset=0x${STUB_OFFSET}, size=${STUB_SIZE})..."
+dd if=AXE.EXE of=axe_stub.bin bs=1 skip=$STUB_OFFSET count=$STUB_SIZE 2>/dev/null
+
+if [ ! -f "axe_stub.bin" ]; then
+    echo "ERROR: Extraction failed. You need 'dd' (coreutils)"
+    exit 1
+fi
+
+echo "Generating axe_stub.h..."
+echo "// STUB extracted from AXE.EXE - DO NOT EDIT" > axe_stub.h
+echo "// Run: ./extract_stub.sh to regenerate" >> axe_stub.h
+echo "static const uint8_t axe_stub[0x12D] = {" >> axe_stub.h
+
+python3 -c "
+with open('axe_stub.bin','rb') as f:
+    data = f.read()
+    for i in range(0, len(data), 16):
+        line = ', '.join(f'0x{b:02x}' for b in data[i:i+16])
+        print(f'    {line},')
+" >> axe_stub.h
+
+echo "};" >> axe_stub.h
+echo "" >> axe_stub.h
+echo "// End of stub" >> axe_stub.h
+
+echo "Done! Copy the contents of axe_stub.h to axe.c"
+echo "Then compile with: make"
