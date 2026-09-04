@@ -8,27 +8,28 @@ Fixes applied (documented, so the diff against the original is auditable):
    always incremented SI/DI. The real AXE stub executes `std` before its
    main record loop (confirmed by independent disassembly), so running
    the original emulator against the real stub would silently decrement
-   nothing and desync SI/DI immediately. Added self.flags['df'] and wired
-   it into cld/std and every string op (movs/stos/lods/scas).
+   nothing and desync SI/DI immediately. Added self.flags['df'] and wired it
+   into cld/std and every string op (movs stos/lods/scas).
 
-2. `sti` is used exactly once in the observed stub, immediately before
-   the final far jump into the now-decompressed original program (which
-   we do not load / do not want to execute). Repurposed as a completion
-   sentinel (also sets self.halted) purely for this test harness.
+2. `sti` is used exactly once in the observed stub, immediately before the
+   final far jump into the now-decompressed original program (which we do
+   not load / do not want to execute). Repurposed as a completion sentinel
+   (also sets self.halted) purely for this test harness.
 
-3. [NEW] Parity flag (PF) was declared in self.flags but never computed
-   by setflags_log/setflags_add, and the conditional-jump table hardcoded
-   opcodes 0x7A (JP/JPE) and 0x7B (JPO) to unconditional False/True
-   instead of testing real parity. Any parity-dependent branch in the
-   real stub would have silently diverged from genuine 8086 behavior.
-   Added standard x86 parity (even parity of the low 8 bits of the
-   result) to both flag-setting helpers and wired 0x7A/0x7B to F['pf'].
+3. [NEW] Parity flag (PF) was declared in self.flags but never computed by
+   setflags_log/setflags_add, and the conditional-jump table hardcoded
+   opcodes 0x7A (JP/JPE) and 0x7B (JPO) to unconditional False/True instead
+   of testing real parity. Any parity-dependent branch in the real stub
+   would have silently diverged from genuine 8086 behavior.
+   Added standard x86 parity (even parity of the low 8 bits of the result)
+   to both flag-setting helpers and wired 0x7A/0x7B to F['pf'].
    NOT YET VERIFIED against axe_disasm.txt whether JP/JPO actually occurs
    in the executed trace -- grep opcode bytes 7a/7b there before assuming
    this changes any observed output.
 
 All other logic is unchanged from the original file.
 """
+
 import sys
 
 class CPU:
