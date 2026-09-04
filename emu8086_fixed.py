@@ -3,16 +3,30 @@
 Patched copy of repo/emu8086.py.
 
 Fixes applied (documented, so the diff against the original is auditable):
-  1. Direction flag (cld/std) was NOT modeled in the original -- string ops
-     always incremented SI/DI. The real AXE stub executes `std` before its
-     main record loop (confirmed by independent disassembly), so running
-     the original emulator against the real stub would silently decrement
-     nothing and desync SI/DI immediately. Added self.flags['df'] and wired
-     it into cld/std and every string op (movs/stos/lods/scas).
-  2. `sti` is used exactly once in the observed stub, immediately before
-     the final far jump into the now-decompressed original program (which
-     we do not load / do not want to execute). Repurposed as a completion
-     sentinel (also sets self.halted) purely for this test harness.
+
+1. Direction flag (cld/std) was NOT modeled in the original -- string ops
+   always incremented SI/DI. The real AXE stub executes `std` before its
+   main record loop (confirmed by independent disassembly), so running
+   the original emulator against the real stub would silently decrement
+   nothing and desync SI/DI immediately. Added self.flags['df'] and wired
+   it into cld/std and every string op (movs/stos/lods/scas).
+
+2. `sti` is used exactly once in the observed stub, immediately before
+   the final far jump into the now-decompressed original program (which
+   we do not load / do not want to execute). Repurposed as a completion
+   sentinel (also sets self.halted) purely for this test harness.
+
+3. [NEW] Parity flag (PF) was declared in self.flags but never computed
+   by setflags_log/setflags_add, and the conditional-jump table hardcoded
+   opcodes 0x7A (JP/JPE) and 0x7B (JPO) to unconditional False/True
+   instead of testing real parity. Any parity-dependent branch in the
+   real stub would have silently diverged from genuine 8086 behavior.
+   Added standard x86 parity (even parity of the low 8 bits of the
+   result) to both flag-setting helpers and wired 0x7A/0x7B to F['pf'].
+   NOT YET VERIFIED against axe_disasm.txt whether JP/JPO actually occurs
+   in the executed trace -- grep opcode bytes 7a/7b there before assuming
+   this changes any observed output.
+
 All other logic is unchanged from the original file.
 """
 import sys
@@ -57,7 +71,7 @@ class CPU:
 
     BYTE_REGS = ['al','cl','dl','bl','ah','ch','dh','bh']
     WORD_REGS = ['ax','cx','dx','bx','sp','bp','si','di']
-    SEG_REGS  = ['es','cs','ss','ds']
+    SEG_REGS = ['es','cs','ss','ds']
 
     def fetch8(self):
         b = self.rb(self.segs['cs'], self.ip); self.ip = (self.ip + 1) & 0xFFFF; return b
@@ -74,6 +88,13 @@ class CPU:
         self.regs['sp'] = (self.regs['sp'] + 2) & 0xFFFF
         return v
 
+    @staticmethod
+    def _parity(v):
+        # Standard x86 PF: 1 if the low byte of the result has an EVEN
+        # number of set bits, 0 if odd. Always computed on 8 low bits
+        # regardless of operand width.
+        return 1 if bin(v & 0xFF).count('1') % 2 == 0 else 0
+
     def setflags_log(self, val, bits):
         mask = 0xFF if bits == 8 else 0xFFFF
         val &= mask
@@ -81,13 +102,16 @@ class CPU:
         self.flags['sf'] = 1 if (val >> (bits-1)) & 1 else 0
         self.flags['cf'] = 0
         self.flags['of'] = 0
+        self.flags['pf'] = self._parity(val)  # FIX: was never set
         return val
+
     def setflags_add(self, a, b, res, bits, sub=False):
         mask = 0xFF if bits == 8 else 0xFFFF
         top = 1 << (bits-1)
         r = res & mask
         self.flags['zf'] = 1 if r == 0 else 0
         self.flags['sf'] = 1 if r & top else 0
+        self.flags['pf'] = self._parity(r)  # FIX: was never set
         if sub:
             self.flags['cf'] = 1 if (a & mask) < (b & mask) else 0
             self.flags['of'] = 1 if (((a ^ b) & (a ^ r)) & top) else 0
@@ -242,17 +266,14 @@ class CPU:
             self.push(self.segs[['es',None,'ss','ds'][ (op>>3)&3 ] if op!=0x0E else 'cs']); return
         if op in (0x07,0x17,0x1F):
             self.segs[{0x07:'es',0x17:'ss',0x1F:'ds'}[op]] = self.pop(); return
-
         if 0xB0 <= op <= 0xB7: self.set8(self.BYTE_REGS[op-0xB0], self.fetch8()); return
         if 0xB8 <= op <= 0xBF: R[self.WORD_REGS[op-0xB8]] = self.fetch16(); return
-
         if 0x40 <= op <= 0x47:
             r = self.WORD_REGS[op-0x40]; old=R[r]; R[r]=(R[r]+1)&0xFFFF
             self.setflags_add(old,1,R[r],16); return
         if 0x48 <= op <= 0x4F:
             r = self.WORD_REGS[op-0x48]; old=R[r]; R[r]=(R[r]-1)&0xFFFF
             self.setflags_add(old,1,R[r],16,sub=True); return
-
         if 0x90 <= op <= 0x97:
             r = self.WORD_REGS[op-0x90]
             if r != 'ax': R['ax'], R[r] = R[r], R['ax']
@@ -261,7 +282,6 @@ class CPU:
             v = self.s8(self.get8('al')); R['ax'] = v & 0xFFFF; return
         if op == 0x99:
             v = self.s16(R['ax']); R['dx'] = 0xFFFF if v < 0 else 0; return
-
         if op in (0xFE, 0xFF):
             wide = (op == 0xFF)
             modb = self.mem[self.lin(self.segs['cs'], self.ip)]
@@ -288,7 +308,6 @@ class CPU:
             elif ext == 6:
                 self.push(self.read_rm(rm, True))
             return
-
         if op in (0x88,0x89,0x8A,0x8B):
             wide = op in (0x89,0x8B)
             reg, rm = self.modrm(wide, seg_override)
@@ -344,7 +363,6 @@ class CPU:
                     a = R['ax'] if wide else self.get8('al')
                     self.alu(ALU[group], a, imm, wide, dest_reg=('ax' if wide else 'al'))
                     return
-
         if op in (0x80,0x81,0x83):
             wide = (op != 0x80)
             modb = self.mem[self.lin(self.segs['cs'], self.ip)]
@@ -356,7 +374,6 @@ class CPU:
             a = self.read_rm(rm, wide)
             self.alu(ALU[ext], a, imm, wide, dest_rm=rm)
             return
-
         if op in (0xD0,0xD1,0xD2,0xD3):
             wide = op in (0xD1,0xD3)
             by_cl = op in (0xD2,0xD3)
@@ -380,7 +397,6 @@ class CPU:
             F['zf'] = 1 if v == 0 else 0
             F['sf'] = 1 if v & top else 0
             self.write_rm(rm, v, wide); return
-
         if op in (0xF6,0xF7):
             wide = (op == 0xF7)
             modb = self.mem[self.lin(self.segs['cs'], self.ip)]
@@ -413,7 +429,6 @@ class CPU:
             else:
                 raise NotImplementedError(f"F6/F7 ext={ext}")
             return
-
         if op == 0x86 or op == 0x87:
             wide = (op==0x87)
             reg, rm = self.modrm(wide, seg_override)
@@ -455,12 +470,12 @@ class CPU:
                 else:
                     break
             return
-
         if 0x70 <= op <= 0x7F:
             cond = {
                 0x70: F['of']==1, 0x71: F['of']==0, 0x72: F['cf']==1, 0x73: F['cf']==0,
                 0x74: F['zf']==1, 0x75: F['zf']==0, 0x76: (F['cf']==1 or F['zf']==1), 0x77: (F['cf']==0 and F['zf']==0),
-                0x78: F['sf']==1, 0x79: F['sf']==0, 0x7A: False, 0x7B: True,
+                0x78: F['sf']==1, 0x79: F['sf']==0,
+                0x7A: F['pf']==1, 0x7B: F['pf']==0,  # FIX: was hardcoded False/True
                 0x7C: (F['sf']!=F['of']), 0x7D: (F['sf']==F['of']),
                 0x7E: (F['zf']==1 or F['sf']!=F['of']), 0x7F: (F['zf']==0 and F['sf']==F['of']),
             }[op]
@@ -512,7 +527,6 @@ class CPU:
             return
         if op == 0xFC: F['df'] = 0; return  # cld -- FIX: previously no-op
         if op == 0xFD: F['df'] = 1; return  # std -- FIX: previously no-op
-
         raise NotImplementedError(f"opcode {op:02x} at CS:IP {self.segs['cs']:04x}:{self.ip-1:04x}")
 
     def alu(self, name, a, b, wide, dest_rm=None, dest_reg=None):
