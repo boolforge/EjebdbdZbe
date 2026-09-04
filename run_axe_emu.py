@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 import sys, struct
 sys.path.insert(0, '/home/claude/work/tools')
-from emu8086 import CPU
+from emu8086_fixed import CPU  # FIX: was `from emu8086 import CPU` -- the
+                                # UNFIXED module (no DF-flag support). Every
+                                # prior run through this harness executed
+                                # without the direction-flag fix regardless
+                                # of emu8086_fixed.py's existence.
 
 def load_and_run(exe_path, max_steps=2_000_000, trace=False, trace_limit=200):
     data = open(exe_path, 'rb').read()
     assert data[0:2] == b'MZ'
-    e_cblp   = data[2] | (data[3]<<8)
-    e_cp     = data[4] | (data[5]<<8)
-    e_cparhdr= data[8] | (data[9]<<8)
+    e_cblp   = data[2]  | (data[3]<<8)
+    e_cp     = data[4]  | (data[5]<<8)
+    e_cparhdr= data[8]  | (data[9]<<8)
     e_ss     = data[0x0E] | (data[0x0F]<<8)
     e_sp     = data[0x10] | (data[0x11]<<8)
     e_ip     = data[0x14] | (data[0x15]<<8)
@@ -45,12 +49,10 @@ def load_and_run(exe_path, max_steps=2_000_000, trace=False, trace_limit=200):
     # exact PSP/argv[0] filename-recovery mechanism is a separate, already
     # well-understood concern; what's under test here is the decompression
     # logic once the file is open, not DOS filename plumbing.
-    class AnyFile:
-        pass
-    orig_int21 = cpu.int21
-    def patched_int21():
-        orig_int21()
-    cpu.int21 = patched_int21
+    # (removed: dead AnyFile class + no-op int21 wrapper that reassigned
+    # cpu.int21 to a function that only ever called the original unchanged --
+    # pure no-op, no behavior lost by deleting it. Reintroduce a real patched_int21
+    # here if/when filename interception actually needs to do something.)
 
     steps = 0
     errors = []
@@ -62,7 +64,7 @@ def load_and_run(exe_path, max_steps=2_000_000, trace=False, trace_limit=200):
         hot[pc] += 1
         try:
             if trace and steps < trace_limit:
-                print(f"[{steps:6d}] CS:IP={cpu.segs['cs']:04x}:{cpu.ip:04x}  "
+                print(f"[{steps:6d}] CS:IP={cpu.segs['cs']:04x}:{cpu.ip:04x} "
                       f"AX={cpu.regs['ax']:04x} BX={cpu.regs['bx']:04x} CX={cpu.regs['cx']:04x} "
                       f"DX={cpu.regs['dx']:04x} SI={cpu.regs['si']:04x} DI={cpu.regs['di']:04x} "
                       f"DS={cpu.segs['ds']:04x} ES={cpu.segs['es']:04x}")
@@ -93,7 +95,7 @@ if __name__ == '__main__':
         print(f"  step {p[0]:8d}: CS:IP={p[1]:04x}:{p[2]:04x}  ES:DI={p[3]:04x}:{p[4]:04x}  SI={p[5]:04x}")
     print("top 15 hottest instruction addresses:")
     for addr, cnt in hot.most_common(15):
-        print(f"  {addr[0]:04x}:{addr[1]:04x}  x{cnt}")
+        print(f"  {addr[0]:04x}:{addr[1]:04x} x{cnt}")
     # dump the output region (decompression writes starting at LOAD_SEG:0)
     out_start = cpu.lin(load_seg, 0)
     dump_len = 400000
