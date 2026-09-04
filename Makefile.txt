@@ -1,0 +1,21 @@
+CC = gcc
+CFLAGS = -O2 -Wall -Wextra -std=c99
+
+all: axe
+
+axe: axe.c
+	$(CC) $(CFLAGS) -o axe axe.c
+
+clean:
+	rm -f axe
+
+test-unpack: axe
+	@./axe unpack -v test/EDGE.packed.exe /tmp/edge_out.exe
+	@cmp /tmp/edge_out.exe test/EDGE_unpacked.EXE && echo "PASS" || echo "FAIL"
+
+test-pack: axe
+	@./axe pack -v test/EDGE_unpacked.EXE /tmp/edge_packed.exe
+	@./axe unpack -v /tmp/edge_packed.exe /tmp/edge_reunpacked.exe
+	@cmp /tmp/edge_reunpacked.exe test/EDGE_unpacked.EXE && echo "PASS" || echo "FAIL"
+
+.PHONY: all clean test-unpack test-pack
